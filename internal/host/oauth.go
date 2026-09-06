@@ -16,62 +16,51 @@ import (
 )
 
 const clientID = "native-engine-host"
+const oauthCallbackScheme = "org.lichess.engine-host"
+const oauthCallbackURI = oauthCallbackScheme + "://oauth/callback"
 
-func oauthLogin(baseURL string) (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+type oauthCallback struct {
+	code string
+	err  string
+}
+
+type oauthReceiver struct {
+	redirectURI  string
+	result       <-chan oauthCallback
+	callbackURLs <-chan *url.URL
+	state        string
+	close        func()
+}
+
+func oauthLogin(baseURL string, callbackURLs <-chan *url.URL) (string, error) {
+	verifier, state := randomString(64), randomString(32)
+	receiver, err := newOAuthReceiver(state, callbackURLs)
 	if err != nil {
 		return "", err
 	}
-	defer listener.Close()
-	redirectURI := "http://" + listener.Addr().String() + "/oauth/callback"
-	verifier, state := randomString(64), randomString(32)
+	defer receiver.close()
+
 	digest := sha256.Sum256([]byte(verifier))
 	query := url.Values{
-		"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirectURI},
+		"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {receiver.redirectURI},
 		"code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(digest[:])},
 		"scope": {"engine:read engine:write"}, "state": {state},
 	}
-
-	type callback struct{ code, err string }
-	result := make(chan callback, 1)
-	server := &http.Server{ReadHeaderTimeout: 5 * time.Second}
-	server.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/oauth/callback" {
-			http.NotFound(writer, request)
-			return
-		}
-		got := callback{code: request.URL.Query().Get("code"), err: request.URL.Query().Get("error")}
-		if request.URL.Query().Get("state") != state {
-			got.err = "invalid OAuth state"
-		}
-		if got.code == "" && got.err == "" {
-			got.err = "missing authorization code"
-		}
-		result <- got
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(writer, "<!doctype html><title>Engine host</title><p>You can close this window.</p>")
-	})
-	go server.Serve(listener)
 	if err := openBrowser(baseURL + "/oauth?" + query.Encode()); err != nil {
-		server.Close()
 		return "", err
 	}
 
-	var got callback
-	select {
-	case got = <-result:
-	case <-time.After(5 * time.Minute):
-		server.Close()
-		return "", errors.New("authorization timed out")
+	got, err := receiver.wait(5 * time.Minute)
+	if err != nil {
+		return "", err
 	}
-	server.Close()
 	if got.err != "" {
 		return "", errors.New(got.err)
 	}
 
 	form := url.Values{
 		"grant_type": {"authorization_code"}, "code": {got.code}, "code_verifier": {verifier},
-		"redirect_uri": {redirectURI}, "client_id": {clientID},
+		"redirect_uri": {receiver.redirectURI}, "client_id": {clientID},
 	}
 	response, err := http.PostForm(baseURL+"/api/token", form)
 	if err != nil {
@@ -88,6 +77,67 @@ func oauthLogin(baseURL string) (string, error) {
 		return "", err
 	}
 	return token.AccessToken, nil
+}
+
+func newOAuthReceiver(state string, callbackURLs <-chan *url.URL) (*oauthReceiver, error) {
+	if runtime.GOOS == "darwin" && callbackURLs != nil {
+		return &oauthReceiver{
+			redirectURI: oauthCallbackURI, callbackURLs: callbackURLs, state: state, close: func() {},
+		}, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	result := make(chan oauthCallback, 1)
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second}
+	server.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/oauth/callback" {
+			http.NotFound(writer, request)
+			return
+		}
+		got := parseOAuthCallback(request.URL, state)
+		result <- got
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(writer, "<!doctype html><title>Engine host</title><p>You can close this window.</p>")
+	})
+	go server.Serve(listener)
+	return &oauthReceiver{
+		redirectURI: "http://" + listener.Addr().String() + "/oauth/callback",
+		result:      result,
+		state:       state,
+		close:       func() { server.Close() },
+	}, nil
+}
+
+func (receiver *oauthReceiver) wait(timeout time.Duration) (oauthCallback, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-receiver.result:
+			return got, nil
+		case callbackURL := <-receiver.callbackURLs:
+			if callbackURL == nil || callbackURL.Scheme != oauthCallbackScheme || callbackURL.Host != "oauth" || callbackURL.Path != "/callback" {
+				continue
+			}
+			return parseOAuthCallback(callbackURL, receiver.state), nil
+		case <-timer.C:
+			return oauthCallback{}, errors.New("authorization timed out")
+		}
+	}
+}
+
+func parseOAuthCallback(callbackURL *url.URL, state string) oauthCallback {
+	got := oauthCallback{code: callbackURL.Query().Get("code"), err: callbackURL.Query().Get("error")}
+	if callbackURL.Query().Get("state") != state {
+		got.err = "invalid OAuth state"
+	}
+	if got.code == "" && got.err == "" {
+		got.err = "missing authorization code"
+	}
+	return got
 }
 
 func openBrowser(target string) error {

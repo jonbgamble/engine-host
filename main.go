@@ -3,10 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"runtime"
 	"strings"
 
 	"gioui.org/app"
+	"gioui.org/io/event"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -19,6 +22,8 @@ import (
 	"github.com/jonbgamble/engine-host/internal/host"
 )
 
+const appID = "org.lichess.engine-host"
+
 type application struct {
 	window   *app.Window
 	explorer *explorer.Explorer
@@ -29,9 +34,9 @@ type application struct {
 	choose     widget.Clickable
 }
 
-func newApplication(window *app.Window) (*application, error) {
+func newApplication(window *app.Window, callbackURLs <-chan *url.URL) (*application, error) {
 	application := &application{window: window, explorer: explorer.NewExplorer(window)}
-	shared, err := host.New(window.Invalidate)
+	shared, err := host.New(window.Invalidate, callbackURLs)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +131,10 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 	})
 }
 
-func run() error {
+func run(callbackURLs <-chan *url.URL) error {
 	window := new(app.Window)
 	window.Option(app.Title("Native engine host"), app.Size(unit.Dp(720), unit.Dp(280)), app.MinSize(unit.Dp(640), unit.Dp(250)))
-	application, err := newApplication(window)
+	application, err := newApplication(window, callbackURLs)
 	if err != nil {
 		return err
 	}
@@ -153,12 +158,24 @@ func run() error {
 }
 
 func main() {
+	var callbackURLs chan *url.URL
+	if runtime.GOOS == "darwin" && app.ID == appID {
+		callbackURLs = make(chan *url.URL)
+	}
 	go func() {
-		if err := run(); err != nil && !strings.Contains(err.Error(), "window closed") {
+		if err := run(callbackURLs); err != nil && !strings.Contains(err.Error(), "window closed") {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
 	}()
-	app.Main()
+	app.Events(func(evt event.Event) bool {
+		if evt, ok := evt.(app.URLEvent); ok {
+			select {
+			case callbackURLs <- evt.URL:
+			default:
+			}
+		}
+		return true
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,18 +27,20 @@ type Config struct {
 }
 
 type App struct {
-	mu      sync.Mutex
-	path    string
-	cfg     Config
-	status  []string
-	notify  func()
-	cancel  context.CancelFunc
-	restart *time.Timer
-	workers sync.WaitGroup
-	closing bool
+	mu           sync.Mutex
+	path         string
+	cfg          Config
+	status       []string
+	notify       func()
+	cancel       context.CancelFunc
+	restart      *time.Timer
+	workers      sync.WaitGroup
+	closing      bool
+	loggingIn    bool
+	callbackURLs <-chan *url.URL
 }
 
-func New(notify func()) (*App, error) {
+func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -49,7 +52,7 @@ func New(notify func()) (*App, error) {
 	if err := saveConfig(path, cfg); err != nil {
 		return nil, err
 	}
-	app := &App{path: path, cfg: cfg, notify: notify}
+	app := &App{path: path, cfg: cfg, notify: notify, callbackURLs: callbackURLs}
 	app.Log("Configuration: %s", path)
 	return app, nil
 }
@@ -102,8 +105,21 @@ func (app *App) storeEngineName(enginePath, name string) error {
 }
 
 func (app *App) Login() error {
+	app.mu.Lock()
+	if app.loggingIn {
+		app.mu.Unlock()
+		return errors.New("authorization already in progress")
+	}
+	app.loggingIn = true
+	app.mu.Unlock()
+	defer func() {
+		app.mu.Lock()
+		app.loggingIn = false
+		app.mu.Unlock()
+	}()
+
 	app.Log("Opening Host authorization")
-	token, err := oauthLogin(app.Config().Host)
+	token, err := oauthLogin(app.Config().Host, app.callbackURLs)
 	if err != nil {
 		app.Log("Login failed: %v", err)
 		return err
