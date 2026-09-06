@@ -93,11 +93,24 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 						}
 						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 							layout.Rigid(material.Button(theme, &application.choose, "Choose engine").Layout),
-							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								label := material.Caption(theme, cfg.Engine)
-								label.MaxLines = 1
-								return label.Layout(gtx)
+								if cfg.Engine == "" {
+									return layout.Dimensions{}
+								}
+								return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											label := material.Caption(theme, "Name: "+cfg.Name)
+											label.MaxLines = 1
+											return label.Layout(gtx)
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											label := material.Caption(theme, "Location: "+cfg.Engine)
+											label.MaxLines = 1
+											return label.Layout(gtx)
+										}),
+									)
+								})
 							}),
 						)
 					}),

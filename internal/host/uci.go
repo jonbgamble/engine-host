@@ -26,6 +26,7 @@ type engine struct {
 	output chan engineLine
 	log    func(string, ...any)
 	done   chan struct{}
+	name   string
 
 	sessionID, variant     string
 	threads, hash, multiPV int
@@ -160,7 +161,13 @@ func (engine *engine) uci() error {
 				}
 			}
 		}
+		if command == "id" && strings.HasPrefix(params, "name ") {
+			engine.name = strings.TrimSpace(strings.TrimPrefix(params, "name "))
+		}
 		if command == "uciok" {
+			if engine.name == "" {
+				return errors.New("engine did not report a UCI id name")
+			}
 			return nil
 		}
 	}

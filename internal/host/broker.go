@@ -30,7 +30,7 @@ type job struct {
 	Work work   `json:"work"`
 }
 
-func provide(ctx context.Context, cfg Config, log func(string, ...any)) error {
+func provide(ctx context.Context, cfg Config, log func(string, ...any), storeEngineName func(string, string) error) error {
 	engine, err := newEngine(cfg, log)
 	if err != nil {
 		return err
@@ -41,6 +41,11 @@ func provide(ctx context.Context, cfg Config, log func(string, ...any)) error {
 		engine.terminate()
 		return err
 	}
+	if err := storeEngineName(cfg.Engine, engine.name); err != nil {
+		engine.terminate()
+		return fmt.Errorf("save engine name: %w", err)
+	}
+	cfg.Name = engine.name
 	log("Engine host ready")
 
 	type runningJob struct {
@@ -144,19 +149,42 @@ func submit(ctx context.Context, client *http.Client, broker, jobID string, engi
 }
 
 func registerEngine(ctx context.Context, client *http.Client, cfg Config, engine *engine, secret string) error {
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Host+"/api/external-engine", nil)
+	endpoint := cfg.Host + "/api/external-engine"
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	request.Header.Set("Authorization", "Bearer "+cfg.Token)
 	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
 	if err := checkResponse(response); err != nil {
+		response.Body.Close()
 		return err
 	}
 	var registered []struct{ ID, Name string }
 	if err := json.NewDecoder(response.Body).Decode(&registered); err != nil {
+		response.Body.Close()
 		return err
+	}
+	response.Body.Close()
+
+	if cfg.Name != "" && cfg.Name != engine.name {
+		for _, candidate := range registered {
+			if candidate.Name != cfg.Name {
+				continue
+			}
+			request, _ = http.NewRequestWithContext(ctx, http.MethodDelete, endpoint+"/"+candidate.ID, nil)
+			request.Header.Set("Authorization", "Bearer "+cfg.Token)
+			response, err = client.Do(request)
+			if err != nil {
+				return err
+			}
+			responseErr := checkResponse(response)
+			response.Body.Close()
+			if responseErr != nil {
+				return responseErr
+			}
+			break
+		}
 	}
 
 	allowed := map[string]bool{"chess": true, "antichess": true, "atomic": true, "crazyhouse": true, "horde": true, "kingofthehill": true, "racingkings": true, "3check": true}
@@ -170,23 +198,24 @@ func registerEngine(ctx context.Context, client *http.Client, cfg Config, engine
 			}
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"name": cfg.Name, "maxThreads": cfg.MaxThreads, "maxHash": cfg.MaxHash, "variants": variants, "providerSecret": secret})
-	method, endpoint := http.MethodPost, cfg.Host+"/api/external-engine"
+	body, _ := json.Marshal(map[string]any{"name": engine.name, "maxThreads": cfg.MaxThreads, "maxHash": cfg.MaxHash, "variants": variants, "providerSecret": secret})
+	method, registrationEndpoint := http.MethodPost, endpoint
 	for _, candidate := range registered {
-		if candidate.Name == cfg.Name {
-			method, endpoint = http.MethodPut, endpoint+"/"+candidate.ID
+		if candidate.Name == engine.name {
+			method, registrationEndpoint = http.MethodPut, endpoint+"/"+candidate.ID
 			break
 		}
 	}
-	request, _ = http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	request, _ = http.NewRequestWithContext(ctx, method, registrationEndpoint, bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+cfg.Token)
 	request.Header.Set("Content-Type", "application/json")
 	response, err = client.Do(request)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
-	return checkResponse(response)
+	responseErr := checkResponse(response)
+	response.Body.Close()
+	return responseErr
 }
 
 func acquire(ctx context.Context, client *http.Client, broker, secret string) (job, bool, error) {

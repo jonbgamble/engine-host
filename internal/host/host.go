@@ -85,6 +85,22 @@ func (app *App) SetEngine(path string) {
 	app.Log("Engine: %s", path)
 }
 
+func (app *App) storeEngineName(enginePath, name string) error {
+	app.mu.Lock()
+	if app.cfg.Engine != enginePath {
+		app.mu.Unlock()
+		return context.Canceled
+	}
+	app.cfg.Name = name
+	cfg, path := app.cfg, app.path
+	app.mu.Unlock()
+	if err := saveConfig(path, cfg); err != nil {
+		return err
+	}
+	app.Log("Engine name: %s", name)
+	return nil
+}
+
 func (app *App) Login() error {
 	app.Log("Opening Host authorization")
 	token, err := oauthLogin(app.Config().Host)
@@ -143,7 +159,7 @@ func (app *App) startHost() {
 		app.cancel()
 	}
 	cfg := app.cfg
-	if cfg.Token == "" || cfg.Engine == "" || cfg.Name == "" {
+	if cfg.Token == "" || cfg.Engine == "" {
 		app.cancel = nil
 		app.mu.Unlock()
 		return
@@ -154,7 +170,7 @@ func (app *App) startHost() {
 	app.mu.Unlock()
 	go func() {
 		defer app.workers.Done()
-		if err := provide(ctx, cfg, app.Log); err != nil && !errors.Is(err, context.Canceled) {
+		if err := provide(ctx, cfg, app.Log, app.storeEngineName); err != nil && !errors.Is(err, context.Canceled) {
 			app.Log("Host stopped: %v", err)
 		}
 	}()
