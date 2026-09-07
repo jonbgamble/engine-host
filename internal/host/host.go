@@ -15,16 +15,22 @@ import (
 )
 
 type Config struct {
-	Name       string      `json:"name"`
-	Engine     string      `json:"engine"`
-	Token      string      `json:"token"`
-	SetOption  [][2]string `json:"setoption,omitempty"`
-	Host       string      `json:"host"`
-	Broker     string      `json:"broker"`
-	MaxThreads int         `json:"maxThreads"`
-	MaxHash    int         `json:"maxHash"`
-	KeepAlive  int         `json:"keepAlive"`
+	Name         string      `json:"name"`
+	Engine       string      `json:"engine"`
+	Token        string      `json:"token,omitempty"`
+	TokenStorage string      `json:"tokenStorage,omitempty"`
+	SetOption    [][2]string `json:"setoption,omitempty"`
+	Host         string      `json:"host"`
+	Broker       string      `json:"broker"`
+	MaxThreads   int         `json:"maxThreads"`
+	MaxHash      int         `json:"maxHash"`
+	KeepAlive    int         `json:"keepAlive"`
 }
+
+const (
+	tokenStorageKeyring   = "keyring"
+	tokenStoragePlaintext = "plaintext"
+)
 
 type App struct {
 	mu           sync.Mutex
@@ -38,9 +44,14 @@ type App struct {
 	closing      bool
 	loggingIn    bool
 	callbackURLs <-chan *url.URL
+	tokens       tokenStore
 }
 
 func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
+	return newApp(notify, callbackURLs, systemTokenStore{})
+}
+
+func newApp(notify func(), callbackURLs <-chan *url.URL, tokens tokenStore) (*App, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -49,12 +60,43 @@ func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", path, err)
 	}
+	tokenMessage := loadStoredToken(&cfg, tokens, path)
 	if err := saveConfig(path, cfg); err != nil {
 		return nil, err
 	}
-	app := &App{path: path, cfg: cfg, notify: notify, callbackURLs: callbackURLs}
+	app := &App{
+		path: path, cfg: cfg, notify: notify, callbackURLs: callbackURLs,
+		tokens: tokens,
+	}
 	app.Log("Configuration: %s", path)
+	if tokenMessage != "" {
+		app.Log("%s", tokenMessage)
+	}
 	return app, nil
+}
+
+func loadStoredToken(cfg *Config, tokens tokenStore, path string) string {
+	switch cfg.TokenStorage {
+	case tokenStorageKeyring:
+		token, err := tokens.Get(cfg.Host)
+		if err != nil {
+			cfg.Token = ""
+			return fmt.Sprintf("Login token unavailable from %s; log in again: %v", tokenStoreName(), err)
+		}
+		if token == "" {
+			cfg.Token = ""
+			return fmt.Sprintf("Login token unavailable from %s; log in again", tokenStoreName())
+		}
+		cfg.Token = token
+		return "Login token stored in " + tokenStoreName()
+	case tokenStoragePlaintext:
+		if cfg.Token != "" {
+			return "Login token stored in plaintext: " + path
+		}
+	default:
+		cfg.Token = ""
+	}
+	return ""
 }
 
 func (app *App) Config() Config {
@@ -124,8 +166,39 @@ func (app *App) Login() error {
 		app.Log("Login failed: %v", err)
 		return err
 	}
-	app.update(func(cfg *Config) { cfg.Token = token })
+	if err := app.storeToken(token); err != nil {
+		app.Log("Login failed: %v", err)
+		return err
+	}
 	app.Log("Logged in with Host")
+	return nil
+}
+
+func (app *App) storeToken(token string) error {
+	app.mu.Lock()
+	host := app.cfg.Host
+	app.mu.Unlock()
+	storeErr := app.tokens.Set(host, token)
+
+	app.mu.Lock()
+	app.cfg.Token = token
+	if storeErr == nil {
+		app.cfg.TokenStorage = tokenStorageKeyring
+	} else {
+		app.cfg.TokenStorage = tokenStoragePlaintext
+	}
+	cfg, path := app.cfg, app.path
+	app.mu.Unlock()
+	if err := saveConfig(path, cfg); err != nil {
+		return fmt.Errorf("save configuration: %w", err)
+	}
+	if storeErr == nil {
+		app.Log("Login token stored in %s", tokenStoreName())
+	} else {
+		app.Log("%s unavailable: %v", tokenStoreName(), storeErr)
+		app.Log("Login token stored in plaintext: %s", path)
+	}
+	app.scheduleHost()
 	return nil
 }
 
@@ -204,7 +277,7 @@ func configPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "uci-engine-host.json"), nil
+	return filepath.Join(dir, "lichess-engine-host.json"), nil
 }
 
 func loadConfig(path string) (Config, error) {
@@ -222,6 +295,9 @@ func loadConfig(path string) (Config, error) {
 func saveConfig(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
+	}
+	if cfg.TokenStorage != tokenStoragePlaintext {
+		cfg.Token = ""
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

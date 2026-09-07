@@ -133,7 +133,7 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 
 func run(callbackURLs <-chan *url.URL) error {
 	window := new(app.Window)
-	window.Option(app.Title("Native engine host"), app.Size(unit.Dp(720), unit.Dp(280)), app.MinSize(unit.Dp(640), unit.Dp(250)))
+	window.Option(app.Title("Lichess engine host"), app.Size(unit.Dp(720), unit.Dp(280)), app.MinSize(unit.Dp(640), unit.Dp(250)))
 	application, err := newApplication(window, callbackURLs)
 	if err != nil {
 		return err

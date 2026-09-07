@@ -3,7 +3,7 @@ APP_ID := org.lichess.engine-host
 OAUTH_SCHEME := org.lichess.engine-host
 MACOS_ARCH ?= $(shell go env GOARCH)
 MACOS_VERSION ?= 1.0.0.1
-MACOS_APP := build/Native Engine Host.app
+MACOS_APP := build/Lichess Engine Host.app
 MACOS_SIGN_KEY ?=
 MACOS_NOTARY_ID ?=
 MACOS_NOTARY_TEAM_ID ?=
@@ -16,7 +16,7 @@ macos:
 		-target macos \
 		-arch "$(MACOS_ARCH)" \
 		-appid "$(APP_ID)" \
-		-name "Native Engine Host" \
+		-name "Lichess Engine Host" \
 		-version "$(MACOS_VERSION)" \
 		-schemes "$(OAUTH_SCHEME)" \
 		-o "$(MACOS_APP)" \

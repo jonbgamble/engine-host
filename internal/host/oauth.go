@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const clientID = "native-engine-host"
+const clientID = "lichess-engine-host"
 const oauthCallbackScheme = "org.lichess.engine-host"
 const oauthCallbackURI = oauthCallbackScheme + "://oauth/callback"
 
@@ -100,7 +100,7 @@ func newOAuthReceiver(state string, callbackURLs <-chan *url.URL) (*oauthReceive
 		got := parseOAuthCallback(request.URL, state)
 		result <- got
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(writer, "<!doctype html><title>Engine host</title><p>You can close this window.</p>")
+		fmt.Fprint(writer, "<!doctype html><title>Lichess Engine Host</title><p>You can close this window.</p>")
 	})
 	go server.Serve(listener)
 	return &oauthReceiver{

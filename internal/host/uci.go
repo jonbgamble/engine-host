@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ type engineLine struct {
 	params  string
 	err     error
 }
+
+var engineNamePattern = regexp.MustCompile(`\w+ [\d.]+`)
 
 type engine struct {
 	cmd    *exec.Cmd
@@ -162,7 +165,11 @@ func (engine *engine) uci() error {
 			}
 		}
 		if command == "id" && strings.HasPrefix(params, "name ") {
-			engine.name = strings.TrimSpace(strings.TrimPrefix(params, "name "))
+			name := strings.TrimSpace(strings.TrimPrefix(params, "name "))
+			if match := engineNamePattern.FindString(name); match != "" {
+				name = match
+			}
+			engine.name = "Native " + name
 		}
 		if command == "uciok" {
 			if engine.name == "" {
