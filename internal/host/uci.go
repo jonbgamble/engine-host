@@ -315,6 +315,11 @@ func (engine *engine) stream(ctx context.Context, output io.Writer) error {
 				return got.err
 			}
 			if got.command == "bestmove" {
+				if stopDeadline == nil && ctx.Err() == nil {
+					if _, err := fmt.Fprintf(output, "bestmove %s\n", got.params); err != nil {
+						return err
+					}
+				}
 				return stopCause
 			}
 			if stopDeadline == nil && ctx.Err() == nil && got.command == "info" && strings.Contains(got.params, "score") {
