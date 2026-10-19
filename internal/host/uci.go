@@ -62,7 +62,7 @@ func newEngine(cfg Config, log func(string, ...any)) (*engine, error) {
 		close(engine.done)
 	}()
 	go engine.readOutput(scanner)
-	if err := engine.uci(); err != nil {
+	if err := engine.uci(cfg); err != nil {
 		engine.terminate()
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (engine *engine) recv() (string, string, error) {
 	return line.command, line.params, line.err
 }
 
-func (engine *engine) uci() error {
+func (engine *engine) uci(cfg Config) error {
 	if err := engine.send("uci"); err != nil {
 		return err
 	}
@@ -169,7 +169,10 @@ func (engine *engine) uci() error {
 			if match := engineNamePattern.FindString(name); match != "" {
 				name = match
 			}
-			engine.name = "Native " + name
+			engine.name = "External " + name
+			if cfg.Mode == ModeDirect {
+				engine.name = "Direct " + name
+			}
 		}
 		if command == "uciok" {
 			if engine.name == "" {

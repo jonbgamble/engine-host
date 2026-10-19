@@ -14,9 +14,18 @@ import (
 	"time"
 )
 
+type Mode string
+
+const (
+	ModeDisconnected Mode = "disconnected"
+	ModeExternal     Mode = "external"
+	ModeDirect       Mode = "direct"
+)
+
 type Config struct {
 	Name         string      `json:"name"`
 	Engine       string      `json:"engine"`
+	Mode         Mode        `json:"mode"`
 	Token        string      `json:"token,omitempty"`
 	TokenStorage string      `json:"tokenStorage,omitempty"`
 	SetOption    [][2]string `json:"setoption,omitempty"`
@@ -39,10 +48,13 @@ type App struct {
 	status       []string
 	notify       func()
 	cancel       context.CancelFunc
+	done         <-chan struct{}
 	restart      *time.Timer
 	workers      sync.WaitGroup
 	closing      bool
 	loggingIn    bool
+	connection   string
+	ready        bool
 	callbackURLs <-chan *url.URL
 	tokens       tokenStore
 }
@@ -111,6 +123,29 @@ func (app *App) Status() string {
 	return strings.Join(app.status, "\n")
 }
 
+func (app *App) Connection() (Mode, string) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if app.cfg.Mode == ModeDisconnected {
+		return ModeDisconnected, "Disconnected"
+	}
+	if app.cfg.Mode == ModeExternal {
+		if app.loggingIn {
+			return ModeDisconnected, "Waiting for Lichess login"
+		}
+		if app.cfg.Token == "" {
+			return ModeDisconnected, "Login required"
+		}
+	}
+	if app.cfg.Engine == "" {
+		return ModeDisconnected, "Choose an engine"
+	}
+	if app.ready {
+		return app.cfg.Mode, app.connection
+	}
+	return ModeDisconnected, app.connection
+}
+
 func (app *App) Log(format string, args ...any) {
 	line := time.Now().Format("15:04:05 ") + fmt.Sprintf(format, args...)
 	app.mu.Lock()
@@ -128,6 +163,17 @@ func (app *App) Log(format string, args ...any) {
 func (app *App) SetEngine(path string) {
 	app.update(func(cfg *Config) { cfg.Engine = path })
 	app.Log("Engine: %s", path)
+}
+
+func (app *App) SetMode(mode Mode) {
+	if active, _ := app.Connection(); active == mode && app.Config().Mode == mode {
+		return
+	}
+	app.update(func(cfg *Config) { cfg.Mode = mode })
+	app.Log("Mode: %s", mode)
+	if mode == ModeExternal && app.Config().Token == "" {
+		go app.Login()
+	}
 }
 
 func (app *App) storeEngineName(enginePath, name string) error {
@@ -157,7 +203,11 @@ func (app *App) Login() error {
 	defer func() {
 		app.mu.Lock()
 		app.loggingIn = false
+		notify := app.notify
 		app.mu.Unlock()
+		if notify != nil {
+			notify()
+		}
 	}()
 
 	app.Log("Opening Host authorization")
@@ -220,6 +270,7 @@ func (app *App) Close() {
 func (app *App) update(change func(*Config)) {
 	app.mu.Lock()
 	change(&app.cfg)
+	app.connection, app.ready = "Connecting...", false
 	cfg, path := app.cfg, app.path
 	app.mu.Unlock()
 	if err := saveConfig(path, cfg); err != nil {
@@ -247,19 +298,51 @@ func (app *App) startHost() {
 	if app.cancel != nil {
 		app.cancel()
 	}
+	app.ready = false
 	cfg := app.cfg
-	if cfg.Token == "" || cfg.Engine == "" {
+	app.connection = fmt.Sprintf("Connecting %s...", cfg.Mode)
+	if cfg.Mode == ModeDisconnected || (cfg.Mode == ModeExternal && cfg.Token == "") || cfg.Engine == "" {
 		app.cancel = nil
 		app.mu.Unlock()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	previous := app.done
+	done := make(chan struct{})
 	app.cancel = cancel
+	app.done = done
 	app.workers.Add(1)
 	app.mu.Unlock()
+	report := func(connection string, ready bool) {
+		app.mu.Lock()
+		if ctx.Err() != nil || app.cfg.Mode != cfg.Mode || app.cfg.Engine != cfg.Engine {
+			app.mu.Unlock()
+			return
+		}
+		app.connection, app.ready = connection, ready
+		notify := app.notify
+		app.mu.Unlock()
+		if notify != nil {
+			notify()
+		}
+	}
 	go func() {
 		defer app.workers.Done()
-		if err := provide(ctx, cfg, app.Log, app.storeEngineName); err != nil && !errors.Is(err, context.Canceled) {
+		defer close(done)
+		if previous != nil {
+			<-previous
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		start := provide
+		connection := "Connected to Lichess"
+		if cfg.Mode == ModeDirect {
+			start = serveDirect
+			connection = "Listening on 127.0.0.1:48036 / 48037"
+		}
+		if err := start(ctx, cfg, app.Log, app.storeEngineName, func() { report(connection, true) }); err != nil && !errors.Is(err, context.Canceled) {
+			report("Connection failed", false)
 			app.Log("Host stopped: %v", err)
 		}
 	}()
@@ -267,7 +350,7 @@ func (app *App) startHost() {
 
 func defaultConfig() Config {
 	return Config{
-		Name: "Native", Host: "https://lichess.org", Broker: "https://engine.lichess.ovh",
+		Name: "Native", Mode: ModeDisconnected, Host: "https://lichess.org", Broker: "https://engine.lichess.ovh",
 		MaxThreads: runtime.NumCPU(), MaxHash: 512, KeepAlive: 300,
 	}
 }

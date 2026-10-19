@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"image/color"
 	"net/url"
 	"os"
 	"runtime"
@@ -30,7 +31,10 @@ type application struct {
 	host     *host.App
 
 	statusText widget.Editor
+	disconnect widget.Clickable
+	external   widget.Clickable
 	login      widget.Clickable
+	direct     widget.Clickable
 	choose     widget.Clickable
 }
 
@@ -66,6 +70,15 @@ func (application *application) chooseEngine() {
 }
 
 func (application *application) frame(gtx layout.Context, theme *material.Theme) layout.Dimensions {
+	for application.disconnect.Clicked(gtx) {
+		application.host.SetMode(host.ModeDisconnected)
+	}
+	for application.external.Clicked(gtx) {
+		application.host.SetMode(host.ModeExternal)
+	}
+	for application.direct.Clicked(gtx) {
+		application.host.SetMode(host.ModeDirect)
+	}
 	for application.login.Clicked(gtx) {
 		go application.host.Login()
 	}
@@ -74,6 +87,13 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 	}
 
 	cfg := application.host.Config()
+	mode, connection := application.host.Connection()
+	modeColor := color.NRGBA{R: 0x60, G: 0x67, B: 0x6c, A: 0xff}
+	if mode == host.ModeExternal {
+		modeColor = color.NRGBA{R: 0x16, G: 0x70, B: 0x43, A: 0xff}
+	} else if mode == host.ModeDirect {
+		modeColor = color.NRGBA{R: 0x08, G: 0x68, B: 0xb2, A: 0xff}
+	}
 	status := application.host.Status()
 	if application.statusText.Text() != status {
 		application.statusText.SetText(status)
@@ -81,46 +101,73 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 	}
 
 	paint.FillShape(gtx.Ops, theme.Bg, clip.Rect{Max: gtx.Constraints.Max}.Op())
-	return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				var label = "Login with Lichess"
-				if cfg.Token != "" {
-					label = "Login again"
+				modeButton := func(clickable *widget.Clickable, label string, value host.Mode) layout.Widget {
+					return func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Constraints.Max.X
+						button := material.Button(theme, clickable, label)
+						button.TextSize = unit.Sp(15)
+						button.Background = color.NRGBA{R: 0xe9, G: 0xec, B: 0xef, A: 0xff}
+						button.Color = theme.Fg
+						if mode == value {
+							button.Background = modeColor
+							button.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+						}
+						return button.Layout(gtx)
+					}
 				}
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(material.Button(theme, &application.login, label).Layout),
+					layout.Flexed(1, modeButton(&application.disconnect, "Disconnected", host.ModeDisconnected)),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, modeButton(&application.external, "External", host.ModeExternal)),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, modeButton(&application.direct, "Direct", host.ModeDirect)),
+				)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				label := material.H6(theme, connection)
+				label.Color = modeColor
+				return label.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(material.Button(theme, &application.choose, "Choose engine").Layout),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						if cfg.Token == "" {
-							defer paint.PushOpacity(gtx.Ops, .38).Pop()
-							gtx = gtx.Disabled()
+						if cfg.Engine == "" {
+							return material.Body1(theme, "No engine selected").Layout(gtx)
 						}
-						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-							layout.Rigid(material.Button(theme, &application.choose, "Choose engine").Layout),
-							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								if cfg.Engine == "" {
-									return layout.Dimensions{}
-								}
-								return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-											label := material.Caption(theme, "Name: "+cfg.Name)
-											label.MaxLines = 1
-											return label.Layout(gtx)
-										}),
-										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-											label := material.Caption(theme, "Location: "+cfg.Engine)
-											label.MaxLines = 1
-											return label.Layout(gtx)
-										}),
-									)
-								})
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								label := material.Body1(theme, cfg.Name)
+								label.MaxLines = 1
+								return label.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								label := material.Caption(theme, "Location: "+cfg.Engine)
+								label.MaxLines = 1
+								return label.Layout(gtx)
 							}),
 						)
 					}),
 				)
 			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if cfg.Mode != host.ModeExternal {
+					return layout.Dimensions{}
+				}
+				label := "Login with Lichess"
+				if cfg.Token != "" {
+					label = "Login again"
+				}
+				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, material.Button(theme, &application.login, label).Layout)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(material.Body2(theme, "Activity").Layout),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				text := material.Editor(theme, &application.statusText, "Status")
@@ -133,7 +180,7 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 
 func run(callbackURLs <-chan *url.URL) error {
 	window := new(app.Window)
-	window.Option(app.Title("Lichess engine host"), app.Size(unit.Dp(720), unit.Dp(280)), app.MinSize(unit.Dp(640), unit.Dp(250)))
+	window.Option(app.Title("Lichess engine host"), app.Size(unit.Dp(720), unit.Dp(400)), app.MinSize(unit.Dp(560), unit.Dp(360)))
 	application, err := newApplication(window, callbackURLs)
 	if err != nil {
 		return err

@@ -30,7 +30,7 @@ type job struct {
 	Work work   `json:"work"`
 }
 
-func provide(ctx context.Context, cfg Config, log func(string, ...any), storeEngineName func(string, string) error) error {
+func provide(ctx context.Context, cfg Config, log func(string, ...any), storeEngineName func(string, string) error, ready func()) error {
 	engine, err := newEngine(cfg, log)
 	if err != nil {
 		return err
@@ -47,6 +47,7 @@ func provide(ctx context.Context, cfg Config, log func(string, ...any), storeEng
 	}
 	cfg.Name = engine.name
 	log("Engine host ready")
+	ready()
 
 	type runningJob struct {
 		cancel context.CancelFunc
