@@ -25,7 +25,13 @@ Raw executables produced by `go build .` and `go run .` use loopback HTTP callba
 
 At login, the host tries to store the bearer token in macOS Keychain, Windows Credential Manager, or Secret Service on Linux. If that write fails, it stores the token in its `0600` JSON configuration instead. The app log reports the selected location. That choice remains authoritative until the next login; startup does not probe or migrate between stores.
 
-Even better:
+## Linux application
+
+```sh
+make install-linux
+```
+
+This installs the app for your user account and adds **Lichess Engine Host** to the application menu.
 
 ## macOS app bundle (sidestep Safari interstitial issues)
 

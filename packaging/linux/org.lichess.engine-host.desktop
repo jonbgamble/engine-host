@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lichess Engine Host
+Comment=Connect native chess engines to Lichess
+Exec=engine-host
+Icon=applications-games
+Terminal=false
+StartupNotify=true
+StartupWMClass=org.lichess.engine-host
+Categories=Game;BoardGame;
+Keywords=Chess;Stockfish;Lichess;

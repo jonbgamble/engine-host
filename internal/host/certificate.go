@@ -15,10 +15,10 @@ import (
 	"time"
 )
 
-func directCertificate() (tls.Certificate, []byte, error) {
+func directCertificate() (tls.Certificate, error) {
 	path, err := configPath()
 	if err != nil {
-		return tls.Certificate{}, nil, err
+		return tls.Certificate{}, err
 	}
 	dir := path + ".tls"
 	certPath, keyPath := filepath.Join(dir, "certificate.pem"), filepath.Join(dir, "key.pem")
@@ -26,11 +26,11 @@ func directCertificate() (tls.Certificate, []byte, error) {
 	if os.IsNotExist(err) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 		if err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		template := &x509.Certificate{
 			SerialNumber: serial,
@@ -45,29 +45,28 @@ func directCertificate() (tls.Certificate, []byte, error) {
 		}
 		der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 		if err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		privateKey, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		if err := os.MkdirAll(dir, 0700); err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKey}), 0600); err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 		certificate = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 		if err := os.WriteFile(certPath, certificate, 0600); err != nil {
-			return tls.Certificate{}, nil, err
+			return tls.Certificate{}, err
 		}
 	} else if err != nil {
-		return tls.Certificate{}, nil, err
+		return tls.Certificate{}, err
 	}
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
-		return tls.Certificate{}, nil, err
+		return tls.Certificate{}, err
 	}
-	pair, err := tls.X509KeyPair(certificate, key)
-	return pair, certificate, err
+	return tls.X509KeyPair(certificate, key)
 }

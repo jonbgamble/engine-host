@@ -1,27 +1,8 @@
 package host
 
-import (
-	"runtime"
-
-	"github.com/zalando/go-keyring"
-)
+import "runtime"
 
 const tokenService = "org.lichess.engine-host"
-
-type tokenStore interface {
-	Get(account string) (string, error)
-	Set(account, token string) error
-}
-
-type systemTokenStore struct{}
-
-func (systemTokenStore) Get(account string) (string, error) {
-	return keyring.Get(tokenService, account)
-}
-
-func (systemTokenStore) Set(account, token string) error {
-	return keyring.Set(tokenService, account, token)
-}
 
 func tokenStoreName() string {
 	switch runtime.GOOS {

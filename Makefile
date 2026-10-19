@@ -7,8 +7,18 @@ MACOS_APP := build/Lichess Engine Host.app
 MACOS_SIGN_KEY ?=
 MACOS_NOTARY_ID ?=
 MACOS_NOTARY_TEAM_ID ?=
+PREFIX ?= $(HOME)/.local
 
-.PHONY: macos clean
+.PHONY: linux install-linux macos clean
+
+linux:
+	mkdir -p build
+	go build -ldflags "-X gioui.org/app.ID=$(APP_ID)" -o build/engine-host .
+
+install-linux: linux
+	install -Dm755 build/engine-host "$(PREFIX)/bin/engine-host"
+	install -Dm644 packaging/linux/$(APP_ID).desktop "$(PREFIX)/share/applications/$(APP_ID).desktop"
+	desktop-file-edit --set-key=Exec --set-value='"$(PREFIX)/bin/engine-host"' "$(PREFIX)/share/applications/$(APP_ID).desktop"
 
 macos:
 	mkdir -p build

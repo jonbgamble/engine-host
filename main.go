@@ -11,6 +11,7 @@ import (
 
 	"gioui.org/app"
 	"gioui.org/io/event"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -26,7 +27,6 @@ import (
 const appID = "org.lichess.engine-host"
 
 type application struct {
-	window   *app.Window
 	explorer *explorer.Explorer
 	host     *host.App
 
@@ -39,7 +39,7 @@ type application struct {
 }
 
 func newApplication(window *app.Window, callbackURLs <-chan *url.URL) (*application, error) {
-	application := &application{window: window, explorer: explorer.NewExplorer(window)}
+	application := &application{explorer: explorer.NewExplorer(window)}
 	shared, err := host.New(window.Invalidate, callbackURLs)
 	if err != nil {
 		return nil, err
@@ -190,6 +190,7 @@ func run(callbackURLs <-chan *url.URL) error {
 
 	theme := material.NewTheme()
 	var operations op.Ops
+	raised := false
 	for {
 		event := window.Event()
 		application.explorer.ListenEvents(event)
@@ -200,6 +201,10 @@ func run(callbackURLs <-chan *url.URL) error {
 			gtx := app.NewContext(&operations, event)
 			application.frame(gtx, theme)
 			event.Frame(gtx.Ops)
+			if !raised {
+				window.Perform(system.ActionRaise)
+				raised = true
+			}
 		}
 	}
 }

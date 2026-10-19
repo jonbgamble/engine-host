@@ -45,7 +45,7 @@ func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), stor
 		MaxThreads int      `json:"maxThreads"`
 		MaxHash    int      `json:"maxHash"`
 	}{1, "__direct_native", probe.name, variants, 1, cfg.MaxThreads, cfg.MaxHash}
-	certificate, _, err := directCertificate()
+	certificate, err := directCertificate()
 	if err != nil {
 		return fmt.Errorf("direct certificate: %w", err)
 	}
@@ -59,7 +59,7 @@ func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), stor
 	mux.HandleFunc("GET /setup", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		setup.Execute(w, struct {
-			Secure bool
+			Secure            bool
 			Host, Fingerprint string
 		}{r.TLS != nil, strings.TrimRight(cfg.Host, "/"), fingerprint})
 	})
@@ -133,7 +133,7 @@ func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), stor
 	})
 	server := &http.Server{TLSConfig: &tls.Config{
 		Certificates: []tls.Certificate{certificate},
-		MinVersion: tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS12,
 	}, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" && origin != strings.TrimRight(cfg.Host, "/") {
@@ -176,13 +176,13 @@ const directSetupPage = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lichess Engine Host</title>
+<title>Engine Host</title>
 <style>
 body{max-width:40rem;margin:3rem auto;padding:0 1.5rem;background:#f6f8fa;color:#24292e;font:17px/1.6 "Trebuchet MS",sans-serif}
 h1{font-size:1.8rem}a{color:#0969a2}li{margin-bottom:1rem}code{overflow-wrap:anywhere;font-size:.85rem}
 .action{display:inline-block;padding:.6rem 1rem;background:#0969a2;color:white;text-decoration:none;border-radius:4px}
 </style>
-<h1>Lichess Engine Host</h1>
+<h1>Engine Host</h1>
 {{if .Secure}}
 <h2>Secure connection accepted</h2>
 <p>Return to analysis and connect your local engine. If Safari still cannot connect, explicitly trust the certificate for SSL in Keychain Access.</p>
@@ -192,7 +192,7 @@ h1{font-size:1.8rem}a{color:#0969a2}li{margin-bottom:1rem}code{overflow-wrap:any
 <p>Your engine is running on this computer. Safari needs a trusted certificate for the secure local connection. Other browsers can normally connect without this setup.</p>
 <ol>
 <li><a href="/certificate.cer" download>Download this installation's certificate</a>, then import it into the <strong>login</strong> keychain in <strong>Keychain Access</strong>.</li>
-<li>Open the <strong>Lichess Engine Host</strong> certificate and expand <strong>Trust</strong>. Set <strong>Secure Sockets Layer (SSL)</strong> to <strong>Always Trust</strong>. Close the window and authenticate if macOS asks.</li>
+<li>Open the <strong>Engine Host</strong> certificate and expand <strong>Trust</strong>. Set <strong>Secure Sockets Layer (SSL)</strong> to <strong>Always Trust</strong>. Close the window and authenticate if macOS asks.</li>
 <li><a href="https://127.0.0.1:48037/setup">Check the secure connection</a>, then return to analysis.</li>
 </ol>
 <p>This trusts only this installation's server certificate. It is not a general-purpose certificate authority. Trust persists independently of Safari website data; replacing or expiring the certificate requires setup again.</p>

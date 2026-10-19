@@ -150,39 +150,49 @@ func submit(ctx context.Context, client *http.Client, broker, jobID string, engi
 }
 
 func registerEngine(ctx context.Context, client *http.Client, cfg Config, engine *engine, secret string) error {
+	doJSON := func(method, endpoint string, body, result any) error {
+		var input io.Reader
+		if body != nil {
+			data, err := json.Marshal(body)
+			if err != nil {
+				return err
+			}
+			input = bytes.NewReader(data)
+		}
+		request, err := http.NewRequestWithContext(ctx, method, endpoint, input)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+cfg.Token)
+		if body != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if err := checkResponse(response); err != nil {
+			return err
+		}
+		if result != nil {
+			return json.NewDecoder(response.Body).Decode(result)
+		}
+		return nil
+	}
 	endpoint := cfg.Host + "/api/external-engine"
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	request.Header.Set("Authorization", "Bearer "+cfg.Token)
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	if err := checkResponse(response); err != nil {
-		response.Body.Close()
-		return err
-	}
 	var registered []struct{ ID, Name string }
-	if err := json.NewDecoder(response.Body).Decode(&registered); err != nil {
-		response.Body.Close()
+	if err := doJSON(http.MethodGet, endpoint, nil, &registered); err != nil {
 		return err
 	}
-	response.Body.Close()
 
 	if cfg.Name != "" && cfg.Name != engine.name {
 		for _, candidate := range registered {
 			if candidate.Name != cfg.Name {
 				continue
 			}
-			request, _ = http.NewRequestWithContext(ctx, http.MethodDelete, endpoint+"/"+candidate.ID, nil)
-			request.Header.Set("Authorization", "Bearer "+cfg.Token)
-			response, err = client.Do(request)
-			if err != nil {
+			if err := doJSON(http.MethodDelete, endpoint+"/"+candidate.ID, nil, nil); err != nil {
 				return err
-			}
-			responseErr := checkResponse(response)
-			response.Body.Close()
-			if responseErr != nil {
-				return responseErr
 			}
 			break
 		}
@@ -199,7 +209,7 @@ func registerEngine(ctx context.Context, client *http.Client, cfg Config, engine
 			}
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"name": engine.name, "maxThreads": cfg.MaxThreads, "maxHash": cfg.MaxHash, "variants": variants, "providerSecret": secret})
+	body := map[string]any{"name": engine.name, "maxThreads": cfg.MaxThreads, "maxHash": cfg.MaxHash, "variants": variants, "providerSecret": secret}
 	method, registrationEndpoint := http.MethodPost, endpoint
 	for _, candidate := range registered {
 		if candidate.Name == engine.name {
@@ -207,16 +217,7 @@ func registerEngine(ctx context.Context, client *http.Client, cfg Config, engine
 			break
 		}
 	}
-	request, _ = http.NewRequestWithContext(ctx, method, registrationEndpoint, bytes.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+cfg.Token)
-	request.Header.Set("Content-Type", "application/json")
-	response, err = client.Do(request)
-	if err != nil {
-		return err
-	}
-	responseErr := checkResponse(response)
-	response.Body.Close()
-	return responseErr
+	return doJSON(method, registrationEndpoint, body, nil)
 }
 
 func acquire(ctx context.Context, client *http.Client, broker, secret string) (job, bool, error) {

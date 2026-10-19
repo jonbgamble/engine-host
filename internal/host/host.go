@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 type Mode string
@@ -49,21 +51,14 @@ type App struct {
 	notify       func()
 	cancel       context.CancelFunc
 	done         <-chan struct{}
-	restart      *time.Timer
-	workers      sync.WaitGroup
 	closing      bool
 	loggingIn    bool
 	connection   string
 	ready        bool
 	callbackURLs <-chan *url.URL
-	tokens       tokenStore
 }
 
 func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
-	return newApp(notify, callbackURLs, systemTokenStore{})
-}
-
-func newApp(notify func(), callbackURLs <-chan *url.URL, tokens tokenStore) (*App, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -72,13 +67,12 @@ func newApp(notify func(), callbackURLs <-chan *url.URL, tokens tokenStore) (*Ap
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", path, err)
 	}
-	tokenMessage := loadStoredToken(&cfg, tokens, path)
+	tokenMessage := loadStoredToken(&cfg, path)
 	if err := saveConfig(path, cfg); err != nil {
 		return nil, err
 	}
 	app := &App{
 		path: path, cfg: cfg, notify: notify, callbackURLs: callbackURLs,
-		tokens: tokens,
 	}
 	app.Log("Configuration: %s", path)
 	if tokenMessage != "" {
@@ -87,10 +81,10 @@ func newApp(notify func(), callbackURLs <-chan *url.URL, tokens tokenStore) (*Ap
 	return app, nil
 }
 
-func loadStoredToken(cfg *Config, tokens tokenStore, path string) string {
+func loadStoredToken(cfg *Config, path string) string {
 	switch cfg.TokenStorage {
 	case tokenStorageKeyring:
-		token, err := tokens.Get(cfg.Host)
+		token, err := keyring.Get(tokenService, cfg.Host)
 		if err != nil {
 			cfg.Token = ""
 			return fmt.Sprintf("Login token unavailable from %s; log in again: %v", tokenStoreName(), err)
@@ -225,10 +219,7 @@ func (app *App) Login() error {
 }
 
 func (app *App) storeToken(token string) error {
-	app.mu.Lock()
-	host := app.cfg.Host
-	app.mu.Unlock()
-	storeErr := app.tokens.Set(host, token)
+	storeErr := keyring.Set(tokenService, app.Config().Host, token)
 
 	app.mu.Lock()
 	app.cfg.Token = token
@@ -248,7 +239,7 @@ func (app *App) storeToken(token string) error {
 		app.Log("%s unavailable: %v", tokenStoreName(), storeErr)
 		app.Log("Login token stored in plaintext: %s", path)
 	}
-	app.scheduleHost()
+	app.startHost()
 	return nil
 }
 
@@ -257,14 +248,14 @@ func (app *App) Start() { app.startHost() }
 func (app *App) Close() {
 	app.mu.Lock()
 	app.closing = true
-	if app.restart != nil {
-		app.restart.Stop()
-	}
 	if app.cancel != nil {
 		app.cancel()
 	}
+	done := app.done
 	app.mu.Unlock()
-	app.workers.Wait()
+	if done != nil {
+		<-done
+	}
 }
 
 func (app *App) update(change func(*Config)) {
@@ -277,16 +268,7 @@ func (app *App) update(change func(*Config)) {
 		app.Log("Saving configuration: %v", err)
 		return
 	}
-	app.scheduleHost()
-}
-
-func (app *App) scheduleHost() {
-	app.mu.Lock()
-	if app.restart != nil {
-		app.restart.Stop()
-	}
-	app.restart = time.AfterFunc(500*time.Millisecond, app.startHost)
-	app.mu.Unlock()
+	app.startHost()
 }
 
 func (app *App) startHost() {
@@ -311,7 +293,6 @@ func (app *App) startHost() {
 	done := make(chan struct{})
 	app.cancel = cancel
 	app.done = done
-	app.workers.Add(1)
 	app.mu.Unlock()
 	report := func(connection string, ready bool) {
 		app.mu.Lock()
@@ -327,7 +308,6 @@ func (app *App) startHost() {
 		}
 	}
 	go func() {
-		defer app.workers.Done()
 		defer close(done)
 		if previous != nil {
 			<-previous
