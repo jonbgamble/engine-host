@@ -1,31 +1,40 @@
-# Lichess engine host
+# Direct Engine Host
+
+This app connects Lichess analysis pages to a native UCI chess engine running on your device. Your browser connects to Direct Engine Host without any hops or intermediary server. Stocfish 19 through Direct Engine host runs standard fishnet mainline analysis over 10x faster than traditional "external engine" due to reduced networking overhead.
+
+Only Chromium and Firefox are supported at this time.
+
+## Install Go
+
+Use Go 1.26 or newer from the [official downloads](https://go.dev/dl/).
+
+- **macOS:** Run the macOS `.pkg` installer, choosing ARM64 for Apple Silicon or AMD64 for Intel.
+- **Linux:** Follow the [official Linux installation steps](https://go.dev/doc/install), using the tarball for your architecture and adding `/usr/local/go/bin` to your `PATH`.
+- **Windows:** Run the Windows `.msi` installer, which adds Go to your `PATH` automatically.
+
+Open a new terminal and run `go version` to verify installation.
 
 ## Run
 
 ```sh
+git clone https://github.com/jonbgamble/engine-host
+cd ./engine-host
 go run .
 ```
 
-Click **Choose engine** and select a UCI engine executable. Engine-host connects directly to the browser, without a Lichess login or intermediary server. The selected engine starts automatically on subsequent launches. Its name, variants, and thread/hash limits come from UCI, not configuration.
+Click **Choose Engine** and select your UCI engine executable. The selected engine starts automatically on subsequent launches. Its name, variants, and thread/hash limits come from UCI, not configuration.
 
-## Browser connection
+In Lichess analysis, click **Setup direct engine** in the engine selector popup and allow local network access when your browser asks. 
 
-Engine-host listens only on `127.0.0.1:48036`, using plain HTTP and WebSocket:
+The configurable thread limit is capped at your host's logical CPU count (including SMT), and the hash limit at currently available RAM minus 256 MB, with a 16 MB floor.
 
-- `GET /v1/info` returns engine metadata and protocol version `1`.
-- `WS /v1/uci` exchanges one UCI command or output line per text message.
-
-In Lichess analysis, use **Connect local engine** in the engine settings and allow local network access when the browser asks. Chromium and Firefox can use the plain loopback connection. Each socket has its own engine process; starting a search closes the previous searching socket and terminates its engine.
-
-### Safari
-
-Safari support requires a signed Safari extension, which is not implemented yet. There is no TLS listener, certificate generation, or certificate-import setup.
-
-The extension needs to bridge discovery and UCI messages between approved Lichess pages and this local service. Signing alone does not bypass browser network restrictions: extension-side loopback access needs to be verified in Safari, with a native-messaging bridge as an alternative. The macOS app must bundle the extension, and users must enable it and grant website access in Safari. Production distribution also needs Apple signing and the appropriate notarization or App Store workflow.
+That's all you need to know to use this software. Now go nuts and analyse all the positions.
 
 ## Configuration
 
-The app stores `lichess-engine-host.json` in the OS user configuration directory. The supported fields are:
+This app is zeroconf, but if you want to tweak the origin it allows connections from to or add custom UCI options, you may do so.
+
+The app stores `direct-engine-host.json` in the OS user configuration directory, importing existing settings on first launch. The supported fields are:
 
 - `engine`: local UCI executable path, selected in the app.
 - `host`: permitted browser origin, defaulting to `https://lichess.org`; use your local Lila origin for development.
@@ -39,23 +48,36 @@ The app stores `lichess-engine-host.json` in the OS user configuration directory
 }
 ```
 
-Unrecognized fields in existing configuration files are discarded when the app saves its configuration.
+## Browser connection
 
-## Linux application
+Direct Engine Host listens only on `127.0.0.1:48036`, using plain HTTP and WebSocket:
 
-```sh
-make install-linux
-```
+- `GET /v1/info` returns engine metadata and protocol version `1`.
+- `WS /v1/uci` exchanges one UCI command or output line per text message.
 
-This installs the app for your user account and adds **Lichess Engine Host** to the application menu.
-
-## macOS app bundle
+## macOS
 
 Build an unsigned macOS app:
 
 ```sh
 make macos
-open "build/Lichess Engine Host.app"
+open "build/Direct Engine Host.app"
 ```
 
-Local unsigned bundles built by you do not require an Apple Developer account. This target builds only engine-host; it does not yet bundle a Safari extension.
+On macOS, the host prevents App Nap while running (this does not prevent sleep).
+
+Safari support would probably require dicking around with Keychain Access or a signed Safari extension. That is not implemented because Apple.
+
+Download Firefox if you want to run this native engine on mac.
+
+## Linux
+
+```sh
+make install-linux
+```
+
+This installs the app for your user account and adds **Direct Engine Host** to the application menu.
+
+## Windows
+
+Untested. Let me know if it works!

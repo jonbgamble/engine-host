@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"image/color"
 	"os"
 	"strings"
 
@@ -18,7 +17,7 @@ import (
 	"gioui.org/widget/material"
 	"gioui.org/x/explorer"
 
-	"github.com/jonbgamble/engine-host/internal/host"
+	"github.com/jonbgamble/direct-engine-host/internal/host"
 )
 
 type application struct {
@@ -66,11 +65,6 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 	}
 
 	cfg := application.host.Config()
-	ready, connection := application.host.Connection()
-	statusColor := color.NRGBA{R: 0x60, G: 0x67, B: 0x6c, A: 0xff}
-	if ready {
-		statusColor = color.NRGBA{R: 0x08, G: 0x68, B: 0xb2, A: 0xff}
-	}
 	status := application.host.Status()
 	if application.statusText.Text() != status {
 		application.statusText.SetText(status)
@@ -80,12 +74,6 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 	paint.FillShape(gtx.Ops, theme.Bg, clip.Rect{Max: gtx.Constraints.Max}.Op())
 	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.H6(theme, connection)
-				label.Color = statusColor
-				return label.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(material.Button(theme, &application.choose, "Choose engine").Layout),
@@ -101,8 +89,6 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 				)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
-			layout.Rigid(material.Body2(theme, "Activity").Layout),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				text := material.Editor(theme, &application.statusText, "Status")
 				text.TextSize = unit.Sp(12)
@@ -113,8 +99,10 @@ func (application *application) frame(gtx layout.Context, theme *material.Theme)
 }
 
 func run() error {
+	endActivity := preventAppNap()
+	defer endActivity()
 	window := new(app.Window)
-	window.Option(app.Title("Lichess engine host"), app.Size(unit.Dp(720), unit.Dp(400)), app.MinSize(unit.Dp(560), unit.Dp(360)))
+	window.Option(app.Title("Direct Engine Host"), app.Size(unit.Dp(720), unit.Dp(400)), app.MinSize(unit.Dp(560), unit.Dp(360)))
 	application, err := newApplication(window)
 	if err != nil {
 		return err

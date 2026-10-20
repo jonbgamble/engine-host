@@ -18,14 +18,17 @@ type directSession struct {
 	cancel     context.CancelFunc
 }
 
-func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), ready func(string)) error {
+func serveDirect(ctx context.Context, cfg Config, probe *engine, log func(string, ...any)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	probe, err := newEngine(cfg, log)
-	if err != nil {
-		return err
+	if probe == nil {
+		var err error
+		probe, err = newEngine(cfg, log)
+		if err != nil {
+			return err
+		}
+		probe.terminate()
 	}
-	probe.terminate()
 	variants := probe.variants
 	if len(variants) == 0 {
 		variants = []string{"chess"}
@@ -107,9 +110,11 @@ func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), read
 			}
 		}
 	})
+	allowedOrigin := strings.TrimRight(cfg.Host, "/")
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && origin != strings.TrimRight(cfg.Host, "/") {
+		if origin != "" && origin != allowedOrigin {
+			log("Rejecting %s %s: origin %q, allowed %q", r.Method, r.URL.Path, origin, allowedOrigin)
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -125,8 +130,7 @@ func serveDirect(ctx context.Context, cfg Config, log func(string, ...any), read
 	defer server.Close()
 	failed := make(chan error, 1)
 	go func() { failed <- server.Serve(listener) }()
-	log("Direct mode ready at http://127.0.0.1:48036")
-	ready(probe.name)
+	log("Listening at http://127.0.0.1:48036")
 	select {
 	case err = <-failed:
 	case <-ctx.Done():

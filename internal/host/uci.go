@@ -2,14 +2,18 @@ package host
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type engineLine struct {
@@ -54,9 +58,11 @@ func newEngine(cfg Config, log func(string, ...any)) (*engine, error) {
 		close(engine.done)
 	}()
 	go engine.readOutput(scanner)
-	if err := engine.uci(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := engine.uci(ctx); err != nil {
 		engine.terminate()
-		return nil, err
+		return nil, fmt.Errorf("UCI handshake: %w", err)
 	}
 	for _, command := range []string{
 		"setoption name UCI_AnalyseMode value true",
@@ -89,7 +95,7 @@ func (engine *engine) send(command string) error {
 	if !engine.alive() {
 		return io.EOF
 	}
-	engine.log("%d << %s", engine.cmd.Process.Pid, command)
+	engine.log("<< %s", command)
 	_, err := fmt.Fprintln(engine.stdin, command)
 	return err
 }
@@ -101,7 +107,7 @@ func (engine *engine) readOutput(scanner *bufio.Scanner) {
 		if line == "" {
 			continue
 		}
-		engine.log("%d >> %s", engine.cmd.Process.Pid, line)
+		engine.log(">> %s", line)
 		command, params, _ := strings.Cut(line, " ")
 		select {
 		case engine.output <- engineLine{command: command, params: params}:
@@ -119,20 +125,24 @@ func (engine *engine) readOutput(scanner *bufio.Scanner) {
 	}
 }
 
-func (engine *engine) recv() (string, string, error) {
-	line, ok := <-engine.output
-	if !ok {
-		return "", "", io.EOF
+func (engine *engine) recv(ctx context.Context) (string, string, error) {
+	select {
+	case line, ok := <-engine.output:
+		if !ok {
+			return "", "", io.EOF
+		}
+		return line.command, line.params, line.err
+	case <-ctx.Done():
+		return "", "", ctx.Err()
 	}
-	return line.command, line.params, line.err
 }
 
-func (engine *engine) uci() error {
+func (engine *engine) uci(ctx context.Context) error {
 	if err := engine.send("uci"); err != nil {
 		return err
 	}
 	for {
-		command, params, err := engine.recv()
+		command, params, err := engine.recv(ctx)
 		if err != nil {
 			return err
 		}
@@ -145,7 +155,7 @@ func (engine *engine) uci() error {
 			}
 		}
 		if command == "id" && strings.HasPrefix(params, "name ") {
-			engine.name = strings.TrimSpace(strings.TrimPrefix(params, "name "))
+			engine.name = "Native " + strings.TrimSpace(strings.TrimPrefix(params, "name "))
 		}
 		if command == "option" {
 			name, definition, _ := strings.Cut(strings.TrimPrefix(params, "name "), " type spin ")
@@ -172,9 +182,25 @@ func (engine *engine) uci() error {
 			if engine.name == "" {
 				return errors.New("engine did not report a UCI id name")
 			}
+			engine.maxThreads = min(engine.maxThreads, runtime.NumCPU())
+			if engine.minThreads > engine.maxThreads {
+				return errors.New("what sort of engine is this?")
+			}
+			if engine.maxHash > 0 {
+				memory, err := mem.VirtualMemory()
+				if err != nil {
+					return fmt.Errorf("reading system memory: %w", err)
+				}
+				engine.maxHash = hashLimit(engine.maxHash, memory.Available)
+			}
 			return nil
 		}
 	}
+}
+
+func hashLimit(engineMax int, availableBytes uint64) int {
+	availableMB := int(availableBytes / (1024 * 1024))
+	return min(engineMax, max(availableMB-256, 16))
 }
 
 func (engine *engine) terminate() {

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Direct Engine Host
+Comment=Connect a local chess engine to your browser
+Exec=direct-engine-host
+Icon=applications-games
+Terminal=false
+Categories=Game;BoardGame;
+StartupWMClass=org.lichess.direct-engine-host
