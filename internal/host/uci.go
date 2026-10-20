@@ -2,15 +2,12 @@ package host
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -21,8 +18,6 @@ type engineLine struct {
 	err     error
 }
 
-var engineNamePattern = regexp.MustCompile(`\w+ [\d.]+`)
-
 type engine struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -31,11 +26,8 @@ type engine struct {
 	done   chan struct{}
 	name   string
 
-	sessionID, variant     string
-	threads, hash, multiPV int
-	variants               []string
-	lastUsedMu             sync.Mutex
-	lastUsed               time.Time
+	variants                        []string
+	minThreads, maxThreads, maxHash int
 }
 
 func newEngine(cfg Config, log func(string, ...any)) (*engine, error) {
@@ -53,7 +45,7 @@ func newEngine(cfg Config, log func(string, ...any)) (*engine, error) {
 	}
 	engine := &engine{
 		cmd: command, stdin: stdin, output: make(chan engineLine, 64),
-		log: log, done: make(chan struct{}), lastUsed: time.Now(),
+		log: log, done: make(chan struct{}), minThreads: 1, maxThreads: 1,
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -62,7 +54,7 @@ func newEngine(cfg Config, log func(string, ...any)) (*engine, error) {
 		close(engine.done)
 	}()
 	go engine.readOutput(scanner)
-	if err := engine.uci(cfg); err != nil {
+	if err := engine.uci(); err != nil {
 		engine.terminate()
 		return nil, err
 	}
@@ -91,18 +83,6 @@ func (engine *engine) alive() bool {
 	default:
 		return true
 	}
-}
-
-func (engine *engine) touch() {
-	engine.lastUsedMu.Lock()
-	engine.lastUsed = time.Now()
-	engine.lastUsedMu.Unlock()
-}
-
-func (engine *engine) idleTime() time.Duration {
-	engine.lastUsedMu.Lock()
-	defer engine.lastUsedMu.Unlock()
-	return time.Since(engine.lastUsed)
 }
 
 func (engine *engine) send(command string) error {
@@ -147,7 +127,7 @@ func (engine *engine) recv() (string, string, error) {
 	return line.command, line.params, line.err
 }
 
-func (engine *engine) uci(cfg Config) error {
+func (engine *engine) uci() error {
 	if err := engine.send("uci"); err != nil {
 		return err
 	}
@@ -165,13 +145,27 @@ func (engine *engine) uci(cfg Config) error {
 			}
 		}
 		if command == "id" && strings.HasPrefix(params, "name ") {
-			name := strings.TrimSpace(strings.TrimPrefix(params, "name "))
-			if match := engineNamePattern.FindString(name); match != "" {
-				name = match
-			}
-			engine.name = "External " + name
-			if cfg.Mode == ModeDirect {
-				engine.name = "Direct " + name
+			engine.name = strings.TrimSpace(strings.TrimPrefix(params, "name "))
+		}
+		if command == "option" {
+			name, definition, _ := strings.Cut(strings.TrimPrefix(params, "name "), " type spin ")
+			if name == "Threads" || name == "Hash" {
+				parts := strings.Fields(definition)
+				for index := range parts[:max(0, len(parts)-1)] {
+					value, err := strconv.Atoi(parts[index+1])
+					if err != nil {
+						continue
+					}
+					if name == "Threads" && parts[index] == "min" {
+						engine.minThreads = value
+					}
+					if name == "Threads" && parts[index] == "max" {
+						engine.maxThreads = value
+					}
+					if name == "Hash" && parts[index] == "max" {
+						engine.maxHash = value
+					}
+				}
 			}
 		}
 		if command == "uciok" {
@@ -179,18 +173,6 @@ func (engine *engine) uci(cfg Config) error {
 				return errors.New("engine did not report a UCI id name")
 			}
 			return nil
-		}
-	}
-}
-
-func (engine *engine) isready() error {
-	if err := engine.send("isready"); err != nil {
-		return err
-	}
-	for {
-		command, _, err := engine.recv()
-		if err != nil || command == "readyok" {
-			return err
 		}
 	}
 }
@@ -205,133 +187,5 @@ func (engine *engine) terminate() {
 	case <-time.After(2 * time.Second):
 		engine.cmd.Process.Kill()
 		<-engine.done
-	}
-}
-
-func (engine *engine) start(work work) error {
-	if work.SessionID != engine.sessionID {
-		engine.sessionID = work.SessionID
-		if err := engine.send("ucinewgame"); err != nil {
-			return err
-		}
-		if err := engine.isready(); err != nil {
-			return err
-		}
-	}
-	changed := false
-	for _, option := range []struct {
-		name    string
-		value   int
-		current *int
-	}{{"Threads", work.Threads, &engine.threads}, {"Hash", work.Hash, &engine.hash}, {"MultiPV", work.MultiPV, &engine.multiPV}} {
-		if *option.current != option.value {
-			if err := engine.send("setoption name " + option.name + " value " + strconv.Itoa(option.value)); err != nil {
-				return err
-			}
-			*option.current, changed = option.value, true
-		}
-	}
-	if engine.variant != work.Variant {
-		if err := engine.send("setoption name UCI_Variant value " + work.Variant); err != nil {
-			return err
-		}
-		engine.variant, changed = work.Variant, true
-	}
-	if changed {
-		if err := engine.isready(); err != nil {
-			return err
-		}
-	}
-	if err := engine.send("position fen " + work.InitialFEN + " moves " + strings.Join(work.Moves, " ")); err != nil {
-		return err
-	}
-	var search string
-	switch {
-	case work.Movetime != nil:
-		search = "movetime " + strconv.FormatUint(*work.Movetime, 10)
-	case work.Depth != nil:
-		search = "depth " + strconv.FormatUint(*work.Depth, 10)
-	case work.Nodes != nil:
-		search = "nodes " + strconv.FormatUint(*work.Nodes, 10)
-	default:
-		return errors.New("work has no search limit")
-	}
-	return engine.send("go " + search)
-}
-
-func (engine *engine) stream(ctx context.Context, output io.Writer) error {
-	defer engine.touch()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	var stopTimer *time.Timer
-	var stopDeadline <-chan time.Time
-	var stopCause error
-	requestStop := func(cause error) error {
-		if stopDeadline != nil {
-			return nil
-		}
-		stopCause = cause
-		if err := engine.send("stop"); err != nil {
-			return err
-		}
-		stopTimer = time.NewTimer(2 * time.Second)
-		stopDeadline = stopTimer.C
-		return nil
-	}
-	defer func() {
-		if stopTimer != nil {
-			stopTimer.Stop()
-		}
-	}()
-	contextDone := ctx.Done()
-	for {
-		if contextDone != nil && ctx.Err() != nil {
-			contextDone = nil
-			if err := requestStop(ctx.Err()); err != nil {
-				return err
-			}
-		}
-		select {
-		case <-contextDone:
-			contextDone = nil
-			if err := requestStop(ctx.Err()); err != nil {
-				return err
-			}
-		case <-stopDeadline:
-			engine.terminate()
-			return stopCause
-		case <-ticker.C:
-			engine.touch()
-			if stopDeadline == nil && ctx.Err() == nil {
-				if _, err := io.WriteString(output, "{\"keepalive\":true}\n"); err != nil {
-					if err := requestStop(err); err != nil {
-						return err
-					}
-				}
-			}
-		case got, ok := <-engine.output:
-			engine.touch()
-			if !ok {
-				return io.EOF
-			}
-			if got.err != nil {
-				return got.err
-			}
-			if got.command == "bestmove" {
-				if stopDeadline == nil && ctx.Err() == nil {
-					if _, err := fmt.Fprintf(output, "bestmove %s\n", got.params); err != nil {
-						return err
-					}
-				}
-				return stopCause
-			}
-			if stopDeadline == nil && ctx.Err() == nil && got.command == "info" && strings.Contains(got.params, "score") {
-				if _, err := fmt.Fprintf(output, "info %s\n", got.params); err != nil {
-					if err := requestStop(err); err != nil {
-						return err
-					}
-				}
-			}
-		}
 	}
 }

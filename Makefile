@@ -1,6 +1,5 @@
 GOGIO_VERSION := v0.10.0
 APP_ID := org.lichess.engine-host
-OAUTH_SCHEME := org.lichess.engine-host
 MACOS_ARCH ?= $(shell go env GOARCH)
 MACOS_VERSION ?= 1.0.0.1
 MACOS_APP := build/Lichess Engine Host.app
@@ -28,7 +27,6 @@ macos:
 		-appid "$(APP_ID)" \
 		-name "Lichess Engine Host" \
 		-version "$(MACOS_VERSION)" \
-		-schemes "$(OAUTH_SCHEME)" \
 		-o "$(MACOS_APP)" \
 		$(if $(MACOS_SIGN_KEY),-signkey "$(MACOS_SIGN_KEY)") \
 		$(if $(MACOS_NOTARY_ID),-notaryid "$(MACOS_NOTARY_ID)") \

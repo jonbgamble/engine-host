@@ -5,60 +5,33 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/zalando/go-keyring"
-)
-
-type Mode string
-
-const (
-	ModeDisconnected Mode = "disconnected"
-	ModeExternal     Mode = "external"
-	ModeDirect       Mode = "direct"
 )
 
 type Config struct {
-	Name         string      `json:"name"`
-	Engine       string      `json:"engine"`
-	Mode         Mode        `json:"mode"`
-	Token        string      `json:"token,omitempty"`
-	TokenStorage string      `json:"tokenStorage,omitempty"`
-	SetOption    [][2]string `json:"setoption,omitempty"`
-	Host         string      `json:"host"`
-	Broker       string      `json:"broker"`
-	MaxThreads   int         `json:"maxThreads"`
-	MaxHash      int         `json:"maxHash"`
-	KeepAlive    int         `json:"keepAlive"`
+	Engine    string      `json:"engine"`
+	SetOption [][2]string `json:"setoption,omitempty"`
+	Host      string      `json:"host"`
 }
-
-const (
-	tokenStorageKeyring   = "keyring"
-	tokenStoragePlaintext = "plaintext"
-)
 
 type App struct {
-	mu           sync.Mutex
-	path         string
-	cfg          Config
-	status       []string
-	notify       func()
-	cancel       context.CancelFunc
-	done         <-chan struct{}
-	closing      bool
-	loggingIn    bool
-	connection   string
-	ready        bool
-	callbackURLs <-chan *url.URL
+	mu         sync.Mutex
+	path       string
+	cfg        Config
+	status     []string
+	notify     func()
+	cancel     context.CancelFunc
+	done       <-chan struct{}
+	closing    bool
+	connection string
+	ready      bool
 }
 
-func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
+func New(notify func()) (*App, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -67,42 +40,12 @@ func New(notify func(), callbackURLs <-chan *url.URL) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", path, err)
 	}
-	tokenMessage := loadStoredToken(&cfg, path)
 	if err := saveConfig(path, cfg); err != nil {
 		return nil, err
 	}
-	app := &App{
-		path: path, cfg: cfg, notify: notify, callbackURLs: callbackURLs,
-	}
+	app := &App{path: path, cfg: cfg, notify: notify}
 	app.Log("Configuration: %s", path)
-	if tokenMessage != "" {
-		app.Log("%s", tokenMessage)
-	}
 	return app, nil
-}
-
-func loadStoredToken(cfg *Config, path string) string {
-	switch cfg.TokenStorage {
-	case tokenStorageKeyring:
-		token, err := keyring.Get(tokenService, cfg.Host)
-		if err != nil {
-			cfg.Token = ""
-			return fmt.Sprintf("Login token unavailable from %s; log in again: %v", tokenStoreName(), err)
-		}
-		if token == "" {
-			cfg.Token = ""
-			return fmt.Sprintf("Login token unavailable from %s; log in again", tokenStoreName())
-		}
-		cfg.Token = token
-		return "Login token stored in " + tokenStoreName()
-	case tokenStoragePlaintext:
-		if cfg.Token != "" {
-			return "Login token stored in plaintext: " + path
-		}
-	default:
-		cfg.Token = ""
-	}
-	return ""
 }
 
 func (app *App) Config() Config {
@@ -117,27 +60,13 @@ func (app *App) Status() string {
 	return strings.Join(app.status, "\n")
 }
 
-func (app *App) Connection() (Mode, string) {
+func (app *App) Connection() (bool, string) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
-	if app.cfg.Mode == ModeDisconnected {
-		return ModeDisconnected, "Disconnected"
-	}
-	if app.cfg.Mode == ModeExternal {
-		if app.loggingIn {
-			return ModeDisconnected, "Waiting for Lichess login"
-		}
-		if app.cfg.Token == "" {
-			return ModeDisconnected, "Login required"
-		}
-	}
 	if app.cfg.Engine == "" {
-		return ModeDisconnected, "Choose an engine"
+		return false, "No engine selected"
 	}
-	if app.ready {
-		return app.cfg.Mode, app.connection
-	}
-	return ModeDisconnected, app.connection
+	return app.ready, app.connection
 }
 
 func (app *App) Log(format string, args ...any) {
@@ -155,95 +84,18 @@ func (app *App) Log(format string, args ...any) {
 }
 
 func (app *App) SetEngine(path string) {
-	app.update(func(cfg *Config) { cfg.Engine = path })
+	app.mu.Lock()
+	app.cfg.Engine = path
+	app.connection, app.ready = "Connecting...", false
+	cfg, configPath := app.cfg, app.path
+	app.mu.Unlock()
 	app.Log("Engine: %s", path)
-}
-
-func (app *App) SetMode(mode Mode) {
-	if active, _ := app.Connection(); active == mode && app.Config().Mode == mode {
+	if err := saveConfig(configPath, cfg); err != nil {
+		app.Log("Saving configuration: %v", err)
 		return
 	}
-	app.update(func(cfg *Config) { cfg.Mode = mode })
-	app.Log("Mode: %s", mode)
-	if mode == ModeExternal && app.Config().Token == "" {
-		go app.Login()
-	}
+	app.Start()
 }
-
-func (app *App) storeEngineName(enginePath, name string) error {
-	app.mu.Lock()
-	if app.cfg.Engine != enginePath {
-		app.mu.Unlock()
-		return context.Canceled
-	}
-	app.cfg.Name = name
-	cfg, path := app.cfg, app.path
-	app.mu.Unlock()
-	if err := saveConfig(path, cfg); err != nil {
-		return err
-	}
-	app.Log("Engine name: %s", name)
-	return nil
-}
-
-func (app *App) Login() error {
-	app.mu.Lock()
-	if app.loggingIn {
-		app.mu.Unlock()
-		return errors.New("authorization already in progress")
-	}
-	app.loggingIn = true
-	app.mu.Unlock()
-	defer func() {
-		app.mu.Lock()
-		app.loggingIn = false
-		notify := app.notify
-		app.mu.Unlock()
-		if notify != nil {
-			notify()
-		}
-	}()
-
-	app.Log("Opening Host authorization")
-	token, err := oauthLogin(app.Config().Host, app.callbackURLs)
-	if err != nil {
-		app.Log("Login failed: %v", err)
-		return err
-	}
-	if err := app.storeToken(token); err != nil {
-		app.Log("Login failed: %v", err)
-		return err
-	}
-	app.Log("Logged in with Host")
-	return nil
-}
-
-func (app *App) storeToken(token string) error {
-	storeErr := keyring.Set(tokenService, app.Config().Host, token)
-
-	app.mu.Lock()
-	app.cfg.Token = token
-	if storeErr == nil {
-		app.cfg.TokenStorage = tokenStorageKeyring
-	} else {
-		app.cfg.TokenStorage = tokenStoragePlaintext
-	}
-	cfg, path := app.cfg, app.path
-	app.mu.Unlock()
-	if err := saveConfig(path, cfg); err != nil {
-		return fmt.Errorf("save configuration: %w", err)
-	}
-	if storeErr == nil {
-		app.Log("Login token stored in %s", tokenStoreName())
-	} else {
-		app.Log("%s unavailable: %v", tokenStoreName(), storeErr)
-		app.Log("Login token stored in plaintext: %s", path)
-	}
-	app.startHost()
-	return nil
-}
-
-func (app *App) Start() { app.startHost() }
 
 func (app *App) Close() {
 	app.mu.Lock()
@@ -258,20 +110,7 @@ func (app *App) Close() {
 	}
 }
 
-func (app *App) update(change func(*Config)) {
-	app.mu.Lock()
-	change(&app.cfg)
-	app.connection, app.ready = "Connecting...", false
-	cfg, path := app.cfg, app.path
-	app.mu.Unlock()
-	if err := saveConfig(path, cfg); err != nil {
-		app.Log("Saving configuration: %v", err)
-		return
-	}
-	app.startHost()
-}
-
-func (app *App) startHost() {
+func (app *App) Start() {
 	app.mu.Lock()
 	if app.closing {
 		app.mu.Unlock()
@@ -282,8 +121,8 @@ func (app *App) startHost() {
 	}
 	app.ready = false
 	cfg := app.cfg
-	app.connection = fmt.Sprintf("Connecting %s...", cfg.Mode)
-	if cfg.Mode == ModeDisconnected || (cfg.Mode == ModeExternal && cfg.Token == "") || cfg.Engine == "" {
+	app.connection = "Connecting..."
+	if cfg.Engine == "" {
 		app.cancel = nil
 		app.mu.Unlock()
 		return
@@ -296,7 +135,7 @@ func (app *App) startHost() {
 	app.mu.Unlock()
 	report := func(connection string, ready bool) {
 		app.mu.Lock()
-		if ctx.Err() != nil || app.cfg.Mode != cfg.Mode || app.cfg.Engine != cfg.Engine {
+		if ctx.Err() != nil || app.cfg.Engine != cfg.Engine {
 			app.mu.Unlock()
 			return
 		}
@@ -315,24 +154,13 @@ func (app *App) startHost() {
 		if ctx.Err() != nil {
 			return
 		}
-		start := provide
-		connection := "Connected to Lichess"
-		if cfg.Mode == ModeDirect {
-			start = serveDirect
-			connection = "Listening on 127.0.0.1:48036 / 48037"
-		}
-		if err := start(ctx, cfg, app.Log, app.storeEngineName, func() { report(connection, true) }); err != nil && !errors.Is(err, context.Canceled) {
+		if err := serveDirect(ctx, cfg, app.Log, func(name string) {
+			report(name+" ready on 127.0.0.1:48036", true)
+		}); err != nil && !errors.Is(err, context.Canceled) {
 			report("Connection failed", false)
 			app.Log("Host stopped: %v", err)
 		}
 	}()
-}
-
-func defaultConfig() Config {
-	return Config{
-		Name: "Native", Mode: ModeDisconnected, Host: "https://lichess.org", Broker: "https://engine.lichess.ovh",
-		MaxThreads: runtime.NumCPU(), MaxHash: 512, KeepAlive: 300,
-	}
 }
 
 func configPath() (string, error) {
@@ -344,7 +172,7 @@ func configPath() (string, error) {
 }
 
 func loadConfig(path string) (Config, error) {
-	cfg := defaultConfig()
+	cfg := Config{Host: "https://lichess.org"}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return cfg, nil
@@ -358,9 +186,6 @@ func loadConfig(path string) (Config, error) {
 func saveConfig(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
-	}
-	if cfg.TokenStorage != tokenStoragePlaintext {
-		cfg.Token = ""
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

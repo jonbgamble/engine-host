@@ -1,29 +1,45 @@
 # Lichess engine host
 
-Clone this repo and:
+## Run
 
-## All platforms
-```
+```sh
 go run .
 ```
 
-Choose **Disconnected**, **External**, or **Direct** in the mode selector. External uses the brokered OAuth connection and opens Lichess login when needed; Direct connects the browser straight to the selected engine without logging in. You can choose an engine and switch modes at any time.
+Click **Choose engine** and select a UCI engine executable. Engine-host connects directly to the browser, without a Lichess login or intermediary server. The selected engine starts automatically on subsequent launches. Its name, variants, and thread/hash limits come from UCI, not configuration.
 
-### Direct mode
+## Browser connection
 
-Direct mode listens on `127.0.0.1:48036` for HTTP/WS and `127.0.0.1:48037` for HTTPS/WSS. Both ports must be available. In Lichess analysis, use **Connect local engine** in the engine settings if your engine is not already listed, and allow local network access when the browser asks. Discovery tries plain HTTP first, then HTTPS, without browser sniffing.
+Engine-host listens only on `127.0.0.1:48036`, using plain HTTP and WebSocket:
 
-Safari requires a trusted certificate for a secure local connection. If **Connect local engine** cannot connect, its dialog offers **Open secure setup**. You can also open `http://127.0.0.1:48036/setup` directly. Download the certificate, import it into the login keychain in Keychain Access, and set its **Trust > Secure Sockets Layer (SSL)** policy to **Always Trust**. Close the certificate window and authenticate if macOS asks, check `https://127.0.0.1:48037/setup`, then return to analysis and retry.
+- `GET /v1/info` returns engine metadata and protocol version `1`.
+- `WS /v1/uci` exchanges one UCI command or output line per text message.
 
-Engine-host generates a unique self-signed server certificate and private key in the `.tls` directory beside its configuration file. It reuses them across launches; do not delete them unless you intend to repeat setup. The certificate is valid for five years and covers `127.0.0.1`, `::1`, and `localhost`. Its SHA-256 fingerprint appears on the setup page and in the host activity log. This is a server certificate, not a general-purpose certificate authority. Keychain trust is independent of Safari website data.
+In Lichess analysis, use **Connect local engine** in the engine settings and allow local network access when the browser asks. Chromium and Firefox can use the plain loopback connection. Each socket has its own engine process; starting a search closes the previous searching socket and terminates its engine.
 
-Background browser requests cannot distinguish an untrusted certificate from other connection failures, so certificate setup is offered as a possibility, not diagnosed automatically. Browsers that connect over HTTP do not need certificate setup.
+### Safari
 
-### External mode
+Safari support requires a signed Safari extension, which is not implemented yet. There is no TLS listener, certificate generation, or certificate-import setup.
 
-Raw executables produced by `go build .` and `go run .` use loopback HTTP callbacks for oauth responses. On mac, you'll run into a Safari issue where it doesn't want to open the callback and complete the transaction for security reasons. At this point, it's easiest to just copy the url from the address bar and copy it to another browser. This will deliver the bearer token.
+The extension needs to bridge discovery and UCI messages between approved Lichess pages and this local service. Signing alone does not bypass browser network restrictions: extension-side loopback access needs to be verified in Safari, with a native-messaging bridge as an alternative. The macOS app must bundle the extension, and users must enable it and grant website access in Safari. Production distribution also needs Apple signing and the appropriate notarization or App Store workflow.
 
-At login, the host tries to store the bearer token in macOS Keychain, Windows Credential Manager, or Secret Service on Linux. If that write fails, it stores the token in its `0600` JSON configuration instead. The app log reports the selected location. That choice remains authoritative until the next login; startup does not probe or migrate between stores.
+## Configuration
+
+The app stores `lichess-engine-host.json` in the OS user configuration directory. The supported fields are:
+
+- `engine`: local UCI executable path, selected in the app.
+- `host`: permitted browser origin, defaulting to `https://lichess.org`; use your local Lila origin for development.
+- `setoption`: optional UCI name/value pairs sent when an engine starts.
+
+```json
+{
+	"engine": "/path/to/stockfish",
+	"host": "https://lichess.org",
+	"setoption": [["SyzygyPath", "/path/to/tablebases"]]
+}
+```
+
+Unrecognized fields in existing configuration files are discarded when the app saves its configuration.
 
 ## Linux application
 
@@ -33,17 +49,13 @@ make install-linux
 
 This installs the app for your user account and adds **Lichess Engine Host** to the application menu.
 
-## macOS app bundle (sidestep Safari interstitial issues)
+## macOS app bundle
 
-This makes a macOS app bundle you can double click. Build an unsigned app for mac:
+Build an unsigned macOS app:
 
 ```sh
 make macos
 open "build/Lichess Engine Host.app"
 ```
 
-The bundle registers `org.lichess.engine-host` as its OAuth callback scheme. Windows and Linux builds continue to use the loopback HTTP callback.
-
-Local unsigned bundles built by you do not require an Apple Developer account.
-
-Find your freshly built Lichess Engine Host in the build folder.
+Local unsigned bundles built by you do not require an Apple Developer account. This target builds only engine-host; it does not yet bundle a Safari extension.
