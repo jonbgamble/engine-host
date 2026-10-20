@@ -31,10 +31,40 @@ printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$workdir/certificat
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 21600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
+curl --fail --silent --show-error --location --retry 3 \
+  https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+  -o "$workdir/developer-id-g2.cer"
+security import "$workdir/developer-id-g2.cer" -k "$keychain"
 security import "$workdir/certificate.p12" -k "$keychain" \
   -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -s -k "$keychain_password" "$keychain" >/dev/null
+
+security find-identity -v -p codesigning "$keychain" > "$workdir/identities.txt"
+cat "$workdir/identities.txt"
+if ! grep -Eq '^[[:space:]]*[0-9]+\) [[:xdigit:]]{40} ' "$workdir/identities.txt"; then
+  printf '%s\n' \
+    'No valid code-signing identity is available in the imported keychain.' \
+    'Check that the .p12 contains an unexpired Developer ID Application certificate and its matching private key.' \
+    'An incomplete or untrusted Apple certificate chain can also invalidate the identity.' >&2
+  security find-identity -p codesigning "$keychain"
+  exit 1
+fi
+if ! awk -v identity="$MACOS_SIGN_IDENTITY" '
+  /^[[:space:]]*[0-9]+\) [[:xdigit:]]+ / {
+    fingerprint = $2
+    name = $0
+    sub(/^[^"]*"/, "", name)
+    sub(/"[[:space:]]*$/, "", name)
+    if (name == identity || toupper(fingerprint) == toupper(identity)) found = 1
+  }
+  END { exit !found }
+' "$workdir/identities.txt"; then
+  printf '%s\n' \
+    'MACOS_SIGN_IDENTITY does not match an imported valid identity.' \
+    'Set it to the exact quoted certificate name above (without the quotes), or its 40-character SHA-1 fingerprint.' >&2
+  exit 1
+fi
 
 app="build/Direct Engine Host.app"
 plist="$app/Contents/Info.plist"
