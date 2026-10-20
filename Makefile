@@ -7,12 +7,17 @@ MACOS_SIGN_KEY ?=
 MACOS_NOTARY_ID ?=
 MACOS_NOTARY_TEAM_ID ?=
 PREFIX ?= $(HOME)/.local
+GOARCH ?= $(shell go env GOARCH)
 
-.PHONY: linux install-linux macos clean
+.PHONY: linux install-linux windows macos clean
 
 linux:
 	mkdir -p build
-	go build -ldflags "-X gioui.org/app.ID=$(APP_ID)" -o build/direct-engine-host .
+	go build -trimpath -ldflags "-X gioui.org/app.ID=$(APP_ID)" -o build/direct-engine-host .
+
+windows:
+	mkdir -p build
+	CGO_ENABLED=0 GOOS=windows GOARCH=$(GOARCH) go build -trimpath -ldflags "-H windowsgui -X gioui.org/app.ID=$(APP_ID)" -o build/direct-engine-host.exe .
 
 install-linux: linux
 	install -Dm755 build/direct-engine-host "$(PREFIX)/bin/direct-engine-host"

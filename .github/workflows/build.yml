@@ -1,0 +1,115 @@
+name: Build and release
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: windows
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: windows
+            arch: arm64
+            runner: ubuntu-24.04
+          - os: macos
+            arch: amd64
+            runner: macos-latest
+          - os: macos
+            arch: arm64
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Linux build dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libegl1-mesa-dev libgles2-mesa-dev libvulkan-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcursor-dev \
+            libxfixes-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - name: Build
+        run: make "${{ matrix.os }}" GOARCH=${{ matrix.arch }} MACOS_ARCH=${{ matrix.arch }}
+      - name: Sign and notarize macOS release
+        if: >-
+          matrix.os == 'macos' && github.event_name == 'push' &&
+          startsWith(github.ref, 'refs/tags/v') && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: bash packaging/macos/sign.sh
+      - name: Package
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          name="direct-engine-host-${TARGET_OS}-${TARGET_ARCH}"
+          case "$TARGET_OS" in
+            linux)
+              tar -czf "dist/$name.tar.gz" -C build direct-engine-host \
+                -C ../packaging/linux org.lichess.direct-engine-host.desktop
+              ;;
+            windows)
+              (cd build && zip "../dist/$name.zip" direct-engine-host.exe)
+              ;;
+            macos)
+              ditto -c -k --sequesterRsrc --keepParent \
+                "build/Direct Engine Host.app" "dist/$name.zip"
+              ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: direct-engine-host-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: direct-engine-host-*
+          merge-multiple: true
+          path: dist
+      - name: Create checksums and draft release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          gh release create "$TAG" --verify-tag --draft --generate-notes \
+            --title "$TAG" *.tar.gz *.zip SHA256SUMS
