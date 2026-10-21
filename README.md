@@ -1,8 +1,8 @@
 # Direct Engine Host
 
-This app connects Lichess analysis pages to a native UCI chess engine running on your device. Your browser connects to Direct Engine Host without any hops or intermediary server. Stocfish 19 through Direct Engine host runs standard fishnet mainline analysis over 10x faster than traditional "external engine" due to reduced networking overhead.
+This app connects Lichess analysis pages to a native UCI chess engine running on your device. Your browser connects to Direct Engine Host without any hops or intermediary server. Stocfish 19 through Direct Engine host runs standard fishnet mainline analysis faster than broker-based external engine due to reduced networking overhead.
 
-Only Chromium and Firefox are supported at this time.
+Only Chromium and Firefox are supported.
 
 ## Install Go
 
@@ -37,13 +37,11 @@ This app is zeroconf, but if you want to tweak the origin it allows connections 
 The app stores `direct-engine-host.json` in the OS user configuration directory, importing existing settings on first launch. The supported fields are:
 
 - `engine`: local UCI executable path, selected in the app.
-- `host`: permitted browser origin, defaulting to `https://lichess.org`; use your local Lila origin for development.
 - `setoption`: optional UCI name/value pairs sent when an engine starts.
 
 ```json
 {
 	"engine": "/path/to/stockfish",
-	"host": "https://lichess.org",
 	"setoption": [["SyzygyPath", "/path/to/tablebases"]]
 }
 ```
