@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"gioui.org/app"
-	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -102,6 +101,7 @@ func run() error {
 	endActivity := preventAppNap()
 	defer endActivity()
 	window := new(app.Window)
+	foreground := foregroundWindow(window)
 	window.Option(app.Title("Direct Engine Host"), app.Size(unit.Dp(720), unit.Dp(400)), app.MinSize(unit.Dp(560), unit.Dp(360)))
 	application, err := newApplication(window)
 	if err != nil {
@@ -112,7 +112,6 @@ func run() error {
 
 	theme := material.NewTheme()
 	var operations op.Ops
-	raised := false
 	for {
 		event := window.Event()
 		application.explorer.ListenEvents(event)
@@ -123,11 +122,8 @@ func run() error {
 			gtx := app.NewContext(&operations, event)
 			application.frame(gtx, theme)
 			event.Frame(gtx.Ops)
-			if !raised {
-				window.Perform(system.ActionRaise)
-				raised = true
-			}
 		}
+		foreground(event)
 	}
 }
 

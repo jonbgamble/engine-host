@@ -110,14 +110,14 @@ func serveDirect(ctx context.Context, cfg Config, probe *engine, log func(string
 			}
 		}
 	})
-	allowedOrigin := strings.TrimRight(cfg.Host, "/")
+	//allowedOrigin := strings.TrimRight(cfg.Host, "/")
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && origin != allowedOrigin {
-			log("Rejecting %s %s: origin %q, allowed %q", r.Method, r.URL.Path, origin, allowedOrigin)
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
+		// if origin != "" && origin != allowedOrigin {
+		// 	log("Rejecting %s %s: origin %q, allowed %q", r.Method, r.URL.Path, origin, allowedOrigin)
+		// 	http.Error(w, "origin not allowed", http.StatusForbidden)
+		// 	return
+		// }
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
 		mux.ServeHTTP(w, r)

@@ -16,7 +16,7 @@ import (
 type Config struct {
 	Engine    string      `json:"engine"`
 	SetOption [][2]string `json:"setoption,omitempty"`
-	Host      string      `json:"host"`
+	// Host      string      `json:"host"`
 }
 
 type App struct {
@@ -200,7 +200,7 @@ func configPath() (string, error) {
 }
 
 func loadConfig(path string) (Config, error) {
-	cfg := Config{Host: "https://lichess.org"}
+	cfg := Config{} //Host: "https://lichess.org"}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		data, err = os.ReadFile(filepath.Join(filepath.Dir(path), "lichess-engine-host.json"))
