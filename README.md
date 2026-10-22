@@ -32,7 +32,7 @@ That's all you need to know to use this software. Now go nuts and analyse all th
 
 ## Configuration
 
-This app is zeroconf, but if you want to tweak the origin it allows connections from to or add custom UCI options, you may do so.
+This app is zeroconf, but if you want to add custom UCI options (for tablebase, etc), you may do so.
 
 The app stores `direct-engine-host.json` in the OS user configuration directory, importing existing settings on first launch. The supported fields are:
 
